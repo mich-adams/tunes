@@ -30,63 +30,71 @@ fn header_title(conn: &mut mpd::client::Client) -> mpd::error::Result<String> {
     }
 }
 
+/// View for information about the currently playing song.
 struct SongInfo {
+    container: gtk::Box,
     album_art: gtk::Image,
     song_text: gtk::Label,
 }
 
-fn song_info() -> mpd::error::Result<(gtk::Widget, SongInfo)> {
-    let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    let album_art = gtk::Image::new();
-    let song_text = gtk::Label::new(None);
-    song_text.set_justify(gtk::Justification::Center);
-    container.add(&album_art);
-    container.add(&song_text);
+impl SongInfo {
+    fn new() -> Self {
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        let album_art = gtk::Image::new();
+        let song_text = gtk::Label::new(None);
+        song_text.set_justify(gtk::Justification::Center);
+        container.add(&album_art);
+        container.add(&song_text);
 
-    let res = SongInfo {
-        album_art,
-        song_text,
-    };
-    update_song_info(&res)?;
-
-    Ok((container.upcast(), res))
-}
-
-fn update_song_info(song_info: &SongInfo) -> mpd::error::Result<()> {
-    let mut conn = Client::connect("127.0.0.1:6600").unwrap();
-    if let Some(song) = conn.currentsong()? {
-        let image_data = conn.albumart(&song).unwrap();
-        let image_pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(
-            &gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from(&image_data)),
-            gtk::gio::Cancellable::NONE,
-        )
-        .ok()
-        .and_then(|x| x.scale_simple(128, 128, gtk::gdk_pixbuf::InterpType::Hyper));
-        song_info.album_art.set_pixbuf(image_pixbuf.as_ref());
-
-        let ssdf = "[Unknown]".into();
-        let title = song.title.unwrap_or_else(|| "[Unknown]".into());
-        let album = song.tags.get("Album").unwrap_or(&ssdf);
-        let artist = song.artist.unwrap_or_else(|| "[Unknown]".into());
-        let string = format!("{}\n{} - {}", title, artist, album);
-        song_info.song_text.set_text(&string);
-
-        let attr_list = gtk::pango::AttrList::new();
-
-        let mut attr = gtk::pango::AttrFloat::new_scale(2.0);
-        attr.set_start_index(0);
-        attr.set_end_index(title.len() as u32);
-        attr_list.insert(attr);
-
-        let mut attr = gtk::pango::AttrFloat::new_scale(1.5);
-        attr.set_start_index(title.len() as u32 + 1);
-        // attr.set_end_index(title.len() as u32 + 1 + album.len() as u32);
-        attr_list.insert(attr);
-
-        song_info.song_text.set_attributes(Some(&attr_list));
+        SongInfo {
+            container,
+            album_art,
+            song_text,
+        }
     }
 
-    Ok(())
+    fn update(&self) -> mpd::error::Result<()> {
+        let mut conn = Client::connect("127.0.0.1:6600").unwrap();
+        if let Some(song) = conn.currentsong()? {
+            let image_data = conn.albumart(&song).unwrap();
+            let image_pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(
+                &gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from(&image_data)),
+                gtk::gio::Cancellable::NONE,
+            )
+            .ok()
+            .and_then(|x| x.scale_simple(128, 128, gtk::gdk_pixbuf::InterpType::Hyper));
+            self.album_art.set_pixbuf(image_pixbuf.as_ref());
+
+            let ssdf = "[Unknown]".into();
+            let title = song.title.unwrap_or_else(|| "[Unknown]".into());
+            let album = song.tags.get("Album").unwrap_or(&ssdf);
+            let artist = song.artist.unwrap_or_else(|| "[Unknown]".into());
+            let string = format!("{}\n{} - {}", title, artist, album);
+            self.song_text.set_text(&string);
+
+            let attr_list = gtk::pango::AttrList::new();
+
+            let mut attr = gtk::pango::AttrFloat::new_scale(2.0);
+            attr.set_start_index(0);
+            attr.set_end_index(title.len() as u32);
+            attr_list.insert(attr);
+
+            let mut attr = gtk::pango::AttrFloat::new_scale(1.5);
+            attr.set_start_index(title.len() as u32 + 1);
+            // attr.set_end_index(title.len() as u32 + 1 + album.len() as u32);
+            attr_list.insert(attr);
+
+            self.song_text.set_attributes(Some(&attr_list));
+        }
+
+        Ok(())
+    }
+}
+
+impl AsRef<gtk::Widget> for SongInfo {
+    fn as_ref(&self) -> &gtk::Widget {
+        self.container.upcast_ref()
+    }
 }
 
 fn main() {
@@ -104,8 +112,10 @@ fn main() {
         // conn.play().unwrap();
 
         let stack = gtk::Stack::new();
-        let (song_info_view, song_info_container) = song_info().unwrap();
-        stack.add_named(&song_info_view, "Currently Playing");
+        // let (song_info_view, song_info_container) = ().unwrap();
+        let song_info = SongInfo::new();
+        song_info.update().expect("Couldn't update song info");
+        stack.add_named(song_info.as_ref(), "Currently Playing");
 
         let header_bar = HeaderBar::builder()
             .show_close_button(true)
@@ -151,7 +161,7 @@ fn main() {
             while let Some(_item) = receiver.next().await {
                 if let Ok(title) = header_title(&mut conn) {
                     ui.header_bar.set_title(Some(&title));
-                    update_song_info(&song_info_container).expect("Couldn't update song info");
+                    song_info.update().expect("Couldn't update song info");
                 }
             }
         });
