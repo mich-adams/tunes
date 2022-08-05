@@ -1,8 +1,7 @@
 use futures::{channel::mpsc, StreamExt};
 use gtk::prelude::*;
-use gtk::{Application, Box, Image, ListBox, Notebook, Orientation};
 use libhandy::prelude::*;
-use libhandy::{ActionRow, ApplicationWindow, HeaderBar};
+use libhandy::{ApplicationWindow, HeaderBar};
 use mpd::idle::Idle;
 use mpd::Client;
 
@@ -23,8 +22,8 @@ fn header_title(conn: &mut mpd::client::Client) -> mpd::error::Result<String> {
         Ok(format!(
             "{} {} - {}",
             state_descriptor,
-            song.title.unwrap_or("Untitled".into()),
-            song.artist.unwrap_or("Untitled".into()),
+            song.title.unwrap_or_else(|| "Untitled".into()),
+            song.artist.unwrap_or_else(|| "Untitled".into()),
         ))
     } else {
         Ok("Tunes".into())
@@ -37,11 +36,24 @@ struct SongInfo {
 }
 
 fn song_info() -> mpd::error::Result<(gtk::Widget, SongInfo)> {
-    let mut conn = Client::connect("127.0.0.1:6600").unwrap();
     let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
     let album_art = gtk::Image::new();
     let song_text = gtk::Label::new(None);
     song_text.set_justify(gtk::Justification::Center);
+    container.add(&album_art);
+    container.add(&song_text);
+
+    let res = SongInfo {
+        album_art,
+        song_text,
+    };
+    update_song_info(&res)?;
+
+    Ok((container.upcast(), res))
+}
+
+fn update_song_info(song_info: &SongInfo) -> mpd::error::Result<()> {
+    let mut conn = Client::connect("127.0.0.1:6600").unwrap();
     if let Some(song) = conn.currentsong()? {
         let image_data = conn.albumart(&song).unwrap();
         let image_pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(
@@ -50,14 +62,14 @@ fn song_info() -> mpd::error::Result<(gtk::Widget, SongInfo)> {
         )
         .ok()
         .and_then(|x| x.scale_simple(128, 128, gtk::gdk_pixbuf::InterpType::Hyper));
-        album_art.set_pixbuf(image_pixbuf.as_ref());
+        song_info.album_art.set_pixbuf(image_pixbuf.as_ref());
 
         let ssdf = "[Unknown]".into();
-        let title = song.title.unwrap_or("[Unknown]".into());
+        let title = song.title.unwrap_or_else(|| "[Unknown]".into());
         let album = song.tags.get("Album").unwrap_or(&ssdf);
-        let artist = song.artist.unwrap_or("[Unknown]".into());
+        let artist = song.artist.unwrap_or_else(|| "[Unknown]".into());
         let string = format!("{}\n{} - {}", title, artist, album);
-        song_text.set_text(&string);
+        song_info.song_text.set_text(&string);
 
         let attr_list = gtk::pango::AttrList::new();
 
@@ -71,23 +83,14 @@ fn song_info() -> mpd::error::Result<(gtk::Widget, SongInfo)> {
         // attr.set_end_index(title.len() as u32 + 1 + album.len() as u32);
         attr_list.insert(attr);
 
-        song_text.set_attributes(Some(&attr_list));
+        song_info.song_text.set_attributes(Some(&attr_list));
     }
 
-    container.add(&album_art);
-    container.add(&song_text);
-
-    Ok((
-        container.upcast(),
-        SongInfo {
-            album_art,
-            song_text,
-        },
-    ))
+    Ok(())
 }
 
 fn main() {
-    let application = Application::builder()
+    let application = gtk::Application::builder()
         .application_id("space.jakob.Tunes")
         .build();
 
@@ -101,7 +104,7 @@ fn main() {
         // conn.play().unwrap();
 
         let stack = gtk::Stack::new();
-        let (song_info_view, _song_info_container) = song_info().unwrap();
+        let (song_info_view, song_info_container) = song_info().unwrap();
         stack.add_named(&song_info_view, "Currently Playing");
 
         let header_bar = HeaderBar::builder()
@@ -117,7 +120,7 @@ fn main() {
         let ui = TunesUI { header_bar };
 
         // Combine the content in a box
-        let content = Box::new(Orientation::Vertical, 0);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         // Handy's ApplicationWindow does not include a HeaderBar
         content.add(&ui.header_bar);
         content.add(&stack);
@@ -135,9 +138,9 @@ fn main() {
         std::thread::spawn(move || loop {
             let mut conn = Client::connect("127.0.0.1:6600").unwrap();
             if let Ok(_subsystems) = conn.wait(&[mpd::idle::Subsystem::Player]) {
-                sender.try_send(true);
+                sender.try_send(true).expect("Couldn't notify thread");
             } else {
-                sender.try_send(false);
+                sender.try_send(false).expect("Couldn't notify thread");
                 break;
             }
         });
@@ -145,9 +148,10 @@ fn main() {
         let main_context = gtk::glib::MainContext::default();
         main_context.spawn_local(async move {
             let mut conn = Client::connect("127.0.0.1:6600").unwrap();
-            while let Some(item) = receiver.next().await {
+            while let Some(_item) = receiver.next().await {
                 if let Ok(title) = header_title(&mut conn) {
                     ui.header_bar.set_title(Some(&title));
+                    update_song_info(&song_info_container).expect("Couldn't update song info");
                 }
             }
         });
