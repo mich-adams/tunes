@@ -1,0 +1,10 @@
+[package]
+name = "tunes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libhandy = "0.9"
+gtk = "0.15"
+mpd = { path = "../mpd" }
+futures = "0.3"
