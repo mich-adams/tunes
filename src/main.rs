@@ -146,31 +146,43 @@ fn main() {
         // conn.play().unwrap();
 
         let stack = gtk::Stack::new();
-        // let (song_info_view, song_info_container) = ().unwrap();
+        stack.set_expand(true);
         let song_info = SongInfo::new();
-        stack.add_named(song_info.as_ref(), "Currently Playing");
+        stack.add_named(song_info.as_ref(), "current_song");
+        stack.set_child_title(song_info.as_ref(), Some("Now Playing"));
+        stack.set_child_icon_name(song_info.as_ref(), Some("audio-speakers-symbolic"));
 
         let header_bar = HeaderBar::builder()
             .show_close_button(true)
             .title(&header_title(&mut conn).unwrap())
             .build();
-        let asdf = libhandy::ViewSwitcherTitle::builder()
+        let view_switcher_title = libhandy::ViewSwitcherTitle::builder()
             .title("Tunes")
             .stack(&stack)
             .build();
-        header_bar.add(&asdf);
+        header_bar.add(&view_switcher_title);
+
+        let view_switcher_bar = libhandy::ViewSwitcherBar::builder()
+            .visible(true)
+            .can_focus(false)
+            .stack(&stack)
+            .reveal(true)
+            .build();
 
         let ui = TunesUI { header_bar };
 
         // Combine the content in a box
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.set_vexpand(true);
         // Handy's ApplicationWindow does not include a HeaderBar
         content.add(&ui.header_bar);
         content.add(&stack);
+        content.add(&view_switcher_bar);
 
         let window = ApplicationWindow::builder()
             .default_width(350)
             .default_height(70)
+            .modal(true)
             // add content to window
             .child(&content)
             .build();
