@@ -45,6 +45,7 @@ impl SongInfo {
         let album_art = gtk::Image::new();
         let song_text = gtk::Label::new(None);
         song_text.set_justify(gtk::Justification::Center);
+        song_text.set_line_wrap(true);
         container.add(&album_art);
         container.add(&song_text);
         SongInfo {
@@ -147,9 +148,6 @@ fn main() {
         let stack = gtk::Stack::new();
         // let (song_info_view, song_info_container) = ().unwrap();
         let song_info = SongInfo::new();
-        song_info
-            .update(&mut conn)
-            .expect("Couldn't update song info");
         stack.add_named(song_info.as_ref(), "Currently Playing");
 
         let header_bar = HeaderBar::builder()
@@ -178,6 +176,12 @@ fn main() {
             .build();
         window.set_application(Some(app));
         window.show_all();
+
+        // Now that everything's been allocated a window, let's go ahead and
+        // update the widgets.
+        song_info
+            .update(&mut conn)
+            .expect("Couldn't update song info");
 
         let (mut sender, mut receiver) = mpsc::channel(1000);
         std::thread::spawn(move || loop {
