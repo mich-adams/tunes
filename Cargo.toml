@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libhandy = "0.9"
-gtk = "0.15"
-mpd = { path = "../mpd" }
+anyhow = "1.0"
 futures = "0.3"
+gtk = "0.15"
+libhandy = "0.9"
+mpd = { path = "../mpd" }

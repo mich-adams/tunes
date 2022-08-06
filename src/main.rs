@@ -1,5 +1,6 @@
 use futures::{channel::mpsc, StreamExt};
 use gtk::prelude::*;
+use gtk::{gdk_pixbuf, gio, glib};
 use libhandy::prelude::*;
 use libhandy::{ApplicationWindow, HeaderBar};
 use mpd::idle::Idle;
@@ -11,7 +12,8 @@ struct TunesUI {
     // queue_switcher: Notebook,
 }
 
-fn header_title(conn: &mut mpd::client::Client) -> mpd::error::Result<String> {
+/// Produce a short status line for the current state of `conn`.
+fn header_title(conn: &mut mpd::client::Client) -> anyhow::Result<String> {
     let status = conn.status();
     let state_descriptor = match status?.state {
         mpd::status::State::Stop => "[STOPPED]",
@@ -26,7 +28,7 @@ fn header_title(conn: &mut mpd::client::Client) -> mpd::error::Result<String> {
             song.artist.unwrap_or_else(|| "Untitled".into()),
         ))
     } else {
-        Ok("Tunes".into())
+        Ok("Tunes: No Song".into())
     }
 }
 
@@ -45,7 +47,6 @@ impl SongInfo {
         song_text.set_justify(gtk::Justification::Center);
         container.add(&album_art);
         container.add(&song_text);
-
         SongInfo {
             container,
             album_art,
@@ -53,35 +54,67 @@ impl SongInfo {
         }
     }
 
-    fn update(&self) -> mpd::error::Result<()> {
-        let mut conn = Client::connect("127.0.0.1:6600").unwrap();
+    fn update(&self, conn: &mut mpd::Client) -> anyhow::Result<()> {
         if let Some(song) = conn.currentsong()? {
-            let image_data = conn.albumart(&song).unwrap();
-            let image_pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(
-                &gtk::gio::MemoryInputStream::from_bytes(&gtk::glib::Bytes::from(&image_data)),
-                gtk::gio::Cancellable::NONE,
+            // If we've been allocated a window, pick the greatest dimension
+            // (width or height) and divide that dimension by two to get the
+            // size (in pixels) that we'll scale the album art to. Otherwise, we
+            // default to 128.
+            let album_art_size = std::cmp::max(
+                self.container
+                    .window()
+                    .map(|x| x.width() / 2)
+                    .unwrap_or(128),
+                self.container
+                    .window()
+                    .map(|x| x.height() / 2)
+                    .unwrap_or(128),
+            );
+
+            let image_data = conn.albumart(&song)?;
+            let image_pixbuf = gdk_pixbuf::Pixbuf::from_stream(
+                &gio::MemoryInputStream::from_bytes(&glib::Bytes::from(&image_data)),
+                gio::Cancellable::NONE,
             )
             .ok()
-            .and_then(|x| x.scale_simple(128, 128, gtk::gdk_pixbuf::InterpType::Hyper));
+            .and_then(|x| {
+                x.scale_simple(
+                    album_art_size,
+                    album_art_size,
+                    gtk::gdk_pixbuf::InterpType::Hyper,
+                )
+            });
             self.album_art.set_pixbuf(image_pixbuf.as_ref());
 
-            let ssdf = "[Unknown]".into();
-            let title = song.title.unwrap_or_else(|| "[Unknown]".into());
-            let album = song.tags.get("Album").unwrap_or(&ssdf);
-            let artist = song.artist.unwrap_or_else(|| "[Unknown]".into());
-            let string = format!("{}\n{} - {}", title, artist, album);
-            self.song_text.set_text(&string);
+            let title = song
+                .title
+                .as_ref()
+                .map(|x| x.as_str())
+                .unwrap_or("[Unknown]");
+            let artist = song
+                .artist
+                .as_ref()
+                .map(|x| x.as_str())
+                .unwrap_or("[Unknown]");
+            let album = song
+                .tags
+                .get("Album")
+                .map(|x| x.as_str())
+                .unwrap_or("[Unknown]");
+            let text = format!("{}\n{} - {}", title, artist, album);
+            self.song_text.set_text(&text);
 
             let attr_list = gtk::pango::AttrList::new();
 
+            // Scale the title of the song the most.
             let mut attr = gtk::pango::AttrFloat::new_scale(2.0);
             attr.set_start_index(0);
             attr.set_end_index(title.len() as u32);
             attr_list.insert(attr);
 
+            // And still make the other info reasonably large.
             let mut attr = gtk::pango::AttrFloat::new_scale(1.5);
             attr.set_start_index(title.len() as u32 + 1);
-            // attr.set_end_index(title.len() as u32 + 1 + album.len() as u32);
             attr_list.insert(attr);
 
             self.song_text.set_attributes(Some(&attr_list));
@@ -114,7 +147,9 @@ fn main() {
         let stack = gtk::Stack::new();
         // let (song_info_view, song_info_container) = ().unwrap();
         let song_info = SongInfo::new();
-        song_info.update().expect("Couldn't update song info");
+        song_info
+            .update(&mut conn)
+            .expect("Couldn't update song info");
         stack.add_named(song_info.as_ref(), "Currently Playing");
 
         let header_bar = HeaderBar::builder()
@@ -161,7 +196,9 @@ fn main() {
             while let Some(_item) = receiver.next().await {
                 if let Ok(title) = header_title(&mut conn) {
                     ui.header_bar.set_title(Some(&title));
-                    song_info.update().expect("Couldn't update song info");
+                    song_info
+                        .update(&mut conn)
+                        .expect("Couldn't update song info");
                 }
             }
         });
