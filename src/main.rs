@@ -131,6 +131,114 @@ impl AsRef<gtk::Widget> for SongInfo {
     }
 }
 
+glib::wrapper! {
+    pub struct SongObject(ObjectSubclass<imp::SongObject>);
+}
+
+impl SongObject {
+    pub fn new(song: &mpd::song::Song) -> Self {
+        glib::Object::new(&[
+            (
+                "title",
+                &song
+                    .name
+                    .as_ref()
+                    .map(|x| x.clone())
+                    .unwrap_or_else(|| "[Untitled]".into()),
+            ),
+            (
+                "artist",
+                &song
+                    .artist
+                    .as_ref()
+                    .map(|x| x.clone())
+                    .unwrap_or_else(|| "[No Artist]".into()),
+            ),
+            (
+                "album",
+                &song
+                    .tags
+                    .get("Album")
+                    .map(|x| x.clone())
+                    .unwrap_or_else(|| "[Untitled]".into()),
+            ),
+        ])
+        .expect("Failed to create `SongObject`.")
+    }
+}
+
+mod imp {
+    use std::cell::RefCell;
+
+    use glib::{ParamSpec, ParamSpecString, Value};
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+    use once_cell::sync::Lazy;
+
+    // Object holding the state
+    #[derive(Default)]
+    pub struct SongObject {
+        title: RefCell<String>,
+        artist: RefCell<String>,
+        album: RefCell<String>,
+    }
+
+    // The central trait for subclassing a GObject
+    #[glib::object_subclass]
+    impl ObjectSubclass for SongObject {
+        const NAME: &'static str = "TunesSongObject";
+        type Type = super::SongObject;
+    }
+
+    // Trait shared by all GObjects
+    impl ObjectImpl for SongObject {
+        fn properties() -> &'static [ParamSpec] {
+            static PROPERTIES: Lazy<Vec<ParamSpec>> = Lazy::new(|| {
+                vec![
+                    ParamSpecString::builder("title").build(),
+                    ParamSpecString::builder("artist").build(),
+                    ParamSpecString::builder("album").build(),
+                ]
+            });
+            PROPERTIES.as_ref()
+        }
+
+        fn set_property(&self, _obj: &Self::Type, _id: usize, value: &Value, pspec: &ParamSpec) {
+            match pspec.name() {
+                "title" => {
+                    let input_number = value
+                        .get()
+                        .expect("The value needs to be of type `String`.");
+                    self.title.replace(input_number);
+                }
+                "artist" => {
+                    let input_number = value
+                        .get()
+                        .expect("The value needs to be of type `String`.");
+                    self.title.replace(input_number);
+                }
+                "album" => {
+                    let input_number = value
+                        .get()
+                        .expect("The value needs to be of type `String`.");
+                    self.title.replace(input_number);
+                }
+                _ => unimplemented!(),
+            }
+        }
+
+        fn property(&self, _obj: &Self::Type, _id: usize, pspec: &ParamSpec) -> Value {
+            match pspec.name() {
+                "title" => self.title.borrow().to_value(),
+                "artist" => self.artist.borrow().to_value(),
+                "album" => self.album.borrow().to_value(),
+                _ => unimplemented!(),
+            }
+        }
+    }
+}
+
 fn main() {
     let application = gtk::Application::builder()
         .application_id("space.jakob.Tunes")

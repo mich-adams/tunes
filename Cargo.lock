@@ -897,6 +897,7 @@ dependencies = [
  "gtk",
  "libhandy",
  "mpd",
+ "once_cell",
 ]
 
 [[package]]
