@@ -37,6 +37,7 @@ struct SongInfo {
     container: gtk::Box,
     album_art: gtk::Image,
     song_text: gtk::Label,
+    model: gio::ListStore,
 }
 
 impl SongInfo {
@@ -127,13 +128,88 @@ impl SongInfo {
                 .expect("Couldn't notify thread");
         });
 
+        let model = gio::ListStore::new(SongObject::static_type());
+        let listbox = gtk::ListBox::new();
+        let sender1 = sender.clone();
+        listbox.bind_model(Some(&model), move |item| {
+            let sender = sender1.clone();
+
+            let box_ = gtk::ListBoxRow::new();
+            let item = item
+                .downcast_ref::<SongObject>()
+                .expect("Row data is of wrong type");
+
+            let grid = gtk::Grid::builder().column_homogeneous(true).build();
+
+            let remove_individual_song = gtk::Button::from_icon_name(
+                Some("list-remove-symbolic"),
+                gtk::IconSize::SmallToolbar,
+            );
+            remove_individual_song.set_visible(true);
+            let index = item.property::<u32>("index");
+            remove_individual_song.connect_clicked(move |_| {
+                let mut sender = sender.clone();
+                sender
+                    .try_send(StateUpdateKind::QueueDeleteRequest(index))
+                    .expect("Couldn't notify thread");
+
+                // We don't actually get notified by `mpd`, but we can pretend
+                // that we did!
+                sender
+                    .try_send(StateUpdateKind::MpdEvent)
+                    .expect("Couldn't notify thread");
+            });
+            grid.attach(&remove_individual_song, 0, 0, 1, 1);
+
+            let title_label = gtk::Label::new(None);
+            title_label.set_line_wrap(true);
+            item.bind_property("title", &title_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            grid.attach(&title_label, 1, 0, 1, 1);
+
+            title_label.set_visible(true); // why?
+
+            let album_label = gtk::Label::new(None);
+            album_label.set_line_wrap(true);
+            item.bind_property("album", &album_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            grid.attach(&album_label, 2, 0, 1, 1);
+
+            album_label.set_visible(true); // why?
+
+            let artist_label = gtk::Label::new(None);
+            artist_label.set_line_wrap(true);
+            item.bind_property("artist", &artist_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            grid.attach(&artist_label, 3, 0, 1, 1);
+
+            artist_label.set_visible(true); // why?
+
+            grid.set_visible(true); // why?
+
+            box_.add(&grid);
+
+            box_.upcast::<gtk::Widget>()
+        });
+
+        let scrolled_window =
+            gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
+        scrolled_window.add(&listbox);
+        scrolled_window.set_vexpand(true);
+
         container.add(&action_bar);
-        action_bar.show_all();
+        container.add(&scrolled_window);
+
+        container.show_all();
 
         SongInfo {
             container,
             album_art,
             song_text,
+            model,
         }
     }
 
@@ -174,6 +250,7 @@ impl SongInfo {
 
     fn update(&self, conn: &mut mpd::Client) -> anyhow::Result<()> {
         self.update_album_art(conn)?;
+
         if let Some(song) = conn.currentsong()? {
             let title = song
                 .title
@@ -207,6 +284,13 @@ impl SongInfo {
             attr_list.insert(attr);
 
             self.song_text.set_attributes(Some(&attr_list));
+        }
+
+        self.model.remove_all();
+        for (i, song) in conn.queue()?.iter().enumerate() {
+            let object = SongObject::new(&song);
+            object.set_index(i.try_into().unwrap());
+            self.model.insert(i.try_into().unwrap(), &object)
         }
 
         Ok(())
@@ -250,7 +334,7 @@ impl QueryInfo {
                 .downcast_ref::<SongObject>()
                 .expect("Row data is of wrong type");
 
-            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 32);
+            let grid = gtk::Grid::builder().column_homogeneous(true).build();
 
             let add_individual_song =
                 gtk::Button::from_icon_name(Some("list-add-symbolic"), gtk::IconSize::SmallToolbar);
@@ -263,35 +347,38 @@ impl QueryInfo {
                     .try_send(StateUpdateKind::QueueAddRequest(filename))
                     .expect("Couldn't notify thread");
             });
-            hbox.pack_start(&add_individual_song, false, false, 0);
+            grid.attach(&add_individual_song, 0, 0, 1, 1);
 
             let title_label = gtk::Label::new(None);
+            title_label.set_line_wrap(true);
             item.bind_property("title", &title_label, "label")
                 .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
                 .build();
-            hbox.pack_start(&title_label, false, false, 0);
+            grid.attach(&title_label, 1, 0, 1, 1);
 
             title_label.set_visible(true); // why?
 
             let album_label = gtk::Label::new(None);
+            album_label.set_line_wrap(true);
             item.bind_property("album", &album_label, "label")
                 .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
                 .build();
-            hbox.pack_start(&album_label, false, false, 0);
+            grid.attach(&album_label, 2, 0, 1, 1);
 
             album_label.set_visible(true); // why?
 
             let artist_label = gtk::Label::new(None);
+            artist_label.set_line_wrap(true);
             item.bind_property("artist", &artist_label, "label")
                 .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
                 .build();
-            hbox.pack_start(&artist_label, false, false, 0);
+            grid.attach(&artist_label, 3, 0, 1, 1);
 
             artist_label.set_visible(true); // why?
 
-            hbox.set_visible(true); // why?
+            grid.set_visible(true); // why?
 
-            box_.add(&hbox);
+            box_.add(&grid);
 
             box_.upcast::<gtk::Widget>()
         });
@@ -318,6 +405,7 @@ glib::wrapper! {
     pub struct SongObject(ObjectSubclass<imp::SongObject>);
 }
 
+use gtk::subclass::prelude::ObjectSubclassExt;
 impl SongObject {
     pub fn new(song: &mpd::song::Song) -> Self {
         glib::Object::new(&[
@@ -349,10 +437,15 @@ impl SongObject {
         ])
         .expect("Failed to create `SongObject`.")
     }
+
+    pub fn set_index(&self, idx: u32) {
+        let private = imp::SongObject::from_instance(self);
+        private.index.set(idx);
+    }
 }
 
 mod imp {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use glib::{ParamSpec, ParamSpecString, Value};
     use gtk::glib;
@@ -367,6 +460,7 @@ mod imp {
         title: RefCell<String>,
         artist: RefCell<String>,
         album: RefCell<String>,
+        pub(crate) index: Cell<u32>,
     }
 
     // The central trait for subclassing a GObject
@@ -385,6 +479,7 @@ mod imp {
                     ParamSpecString::builder("title").build(),
                     ParamSpecString::builder("artist").build(),
                     ParamSpecString::builder("album").build(),
+                    ParamSpecString::builder("index").build(),
                 ]
             });
             PROPERTIES.as_ref()
@@ -416,6 +511,10 @@ mod imp {
                         .expect("The value needs to be of type `String`.");
                     self.album.replace(input);
                 }
+                "index" => {
+                    let input = value.get().expect("The value needs to be of type `u32`.");
+                    self.index.replace(input);
+                }
                 _ => unimplemented!(),
             }
         }
@@ -426,6 +525,7 @@ mod imp {
                 "title" => self.title.borrow().to_value(),
                 "artist" => self.artist.borrow().to_value(),
                 "album" => self.album.borrow().to_value(),
+                "index" => self.index.get().to_value(),
                 _ => unimplemented!(),
             }
         }
@@ -438,6 +538,7 @@ enum StateUpdateKind {
     WindowResizeEvent,
     QueryUpdateEvent(String),
     QueueAddRequest(String),
+    QueueDeleteRequest(u32),
     PlaybackStateChange(PlaybackStateChange),
 }
 
@@ -579,6 +680,9 @@ fn main() {
                         for song in songs.unwrap() {
                             query_info.model.insert(0, &SongObject::new(&song));
                         }
+                    }
+                    StateUpdateKind::QueueDeleteRequest(index) => {
+                        conn.delete(index).expect("Couldn't dequeue song");
                     }
                     StateUpdateKind::QueueAddRequest(filename) => {
                         conn.push_str(filename).expect("Couldn't queue song");
