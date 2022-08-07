@@ -142,8 +142,9 @@ impl QueryInfo {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 2);
 
         let query_input = gtk::Entry::builder().visible(true).build();
+        let sender1 = sender.clone();
         query_input.connect_key_press_event(move |widget, _| {
-            let mut sender = sender.clone(); // Interesting ownership puzzle :D
+            let mut sender = sender1.clone(); // Interesting ownership puzzle :D
             sender
                 .try_send(StateUpdateKind::QueryUpdateEvent(widget.text().into()))
                 .expect("Couldn't notify thread");
@@ -153,12 +154,27 @@ impl QueryInfo {
         let model = gio::ListStore::new(SongObject::static_type());
         let listbox = gtk::ListBox::new();
         listbox.bind_model(Some(&model), move |item| {
+            let sender = sender.clone();
+
             let box_ = gtk::ListBoxRow::new();
             let item = item
                 .downcast_ref::<SongObject>()
                 .expect("Row data is of wrong type");
 
             let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 32);
+
+            let add_individual_song =
+                gtk::Button::from_icon_name(Some("list-add-symbolic"), gtk::IconSize::SmallToolbar);
+            add_individual_song.set_visible(true);
+            let filename = item.property::<String>("filename");
+            add_individual_song.connect_clicked(move |_| {
+                let filename = filename.clone();
+                let mut sender = sender.clone();
+                sender
+                    .try_send(StateUpdateKind::QueueAddRequest(filename))
+                    .expect("Couldn't notify thread");
+            });
+            hbox.pack_start(&add_individual_song, false, false, 0);
 
             let title_label = gtk::Label::new(None);
             item.bind_property("title", &title_label, "label")
@@ -216,6 +232,7 @@ glib::wrapper! {
 impl SongObject {
     pub fn new(song: &mpd::song::Song) -> Self {
         glib::Object::new(&[
+            ("filename", &song.file.clone()),
             (
                 "title",
                 &song
@@ -257,6 +274,7 @@ mod imp {
     // Object holding the state
     #[derive(Default)]
     pub struct SongObject {
+        filename: RefCell<String>,
         title: RefCell<String>,
         artist: RefCell<String>,
         album: RefCell<String>,
@@ -274,6 +292,7 @@ mod imp {
         fn properties() -> &'static [ParamSpec] {
             static PROPERTIES: Lazy<Vec<ParamSpec>> = Lazy::new(|| {
                 vec![
+                    ParamSpecString::builder("filename").build(),
                     ParamSpecString::builder("title").build(),
                     ParamSpecString::builder("artist").build(),
                     ParamSpecString::builder("album").build(),
@@ -284,6 +303,12 @@ mod imp {
 
         fn set_property(&self, _obj: &Self::Type, _id: usize, value: &Value, pspec: &ParamSpec) {
             match pspec.name() {
+                "filename" => {
+                    let input = value
+                        .get()
+                        .expect("The value needs to be of type `String`.");
+                    self.filename.replace(input);
+                }
                 "title" => {
                     let input = value
                         .get()
@@ -308,6 +333,7 @@ mod imp {
 
         fn property(&self, _obj: &Self::Type, _id: usize, pspec: &ParamSpec) -> Value {
             match pspec.name() {
+                "filename" => self.filename.borrow().to_value(),
                 "title" => self.title.borrow().to_value(),
                 "artist" => self.artist.borrow().to_value(),
                 "album" => self.album.borrow().to_value(),
@@ -321,6 +347,7 @@ mod imp {
 enum StateUpdateKind {
     MpdEvent,
     QueryUpdateEvent(String),
+    QueueAddRequest(String),
 }
 
 fn main() {
@@ -440,6 +467,9 @@ fn main() {
                         for song in songs.unwrap() {
                             query_info.model.insert(0, &SongObject::new(&song));
                         }
+                    }
+                    StateUpdateKind::QueueAddRequest(filename) => {
+                        conn.push_str(filename).expect("Couldn't queue song");
                     }
                 }
             }
