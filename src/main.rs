@@ -131,6 +131,74 @@ impl AsRef<gtk::Widget> for SongInfo {
     }
 }
 
+/// View for selecting songs to add to the queue.
+struct QueryInfo {
+    container: gtk::Box,
+    model: gio::ListStore,
+}
+
+impl QueryInfo {
+    fn new() -> Self {
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
+
+        let model = gio::ListStore::new(SongObject::static_type());
+        let listbox = gtk::ListBox::new();
+        listbox.bind_model(Some(&model), move |item| {
+            let box_ = gtk::ListBoxRow::new();
+            let item = item
+                .downcast_ref::<SongObject>()
+                .expect("Row data is of wrong type");
+
+            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+
+            let title_label = gtk::Label::new(None);
+            item.bind_property("title", &title_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            hbox.pack_start(&title_label, true, true, 0);
+
+            title_label.set_visible(true); // why?
+
+            let album_label = gtk::Label::new(None);
+            item.bind_property("album", &album_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            hbox.pack_start(&album_label, false, false, 0);
+
+            album_label.set_visible(true); // why?
+
+            let artist_label = gtk::Label::new(None);
+            item.bind_property("artist", &artist_label, "label")
+                .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
+                .build();
+            hbox.pack_start(&artist_label, false, false, 0);
+
+            artist_label.set_visible(true); // why?
+
+            hbox.set_visible(true); // why?
+
+            box_.add(&hbox);
+
+            box_.upcast::<gtk::Widget>()
+        });
+
+        let scrolled_window =
+            gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
+        scrolled_window.add(&listbox);
+        scrolled_window.set_vexpand(true);
+
+        container.add(&scrolled_window);
+
+        QueryInfo { container, model }
+    }
+}
+
+impl AsRef<gtk::Widget> for QueryInfo {
+    fn as_ref(&self) -> &gtk::Widget {
+        self.container.upcast_ref()
+    }
+}
+
 glib::wrapper! {
     pub struct SongObject(ObjectSubclass<imp::SongObject>);
 }
@@ -141,7 +209,7 @@ impl SongObject {
             (
                 "title",
                 &song
-                    .name
+                    .title
                     .as_ref()
                     .map(|x| x.clone())
                     .unwrap_or_else(|| "[Untitled]".into()),
@@ -207,22 +275,22 @@ mod imp {
         fn set_property(&self, _obj: &Self::Type, _id: usize, value: &Value, pspec: &ParamSpec) {
             match pspec.name() {
                 "title" => {
-                    let input_number = value
+                    let input = value
                         .get()
                         .expect("The value needs to be of type `String`.");
-                    self.title.replace(input_number);
+                    self.title.replace(input);
                 }
                 "artist" => {
-                    let input_number = value
+                    let input = value
                         .get()
                         .expect("The value needs to be of type `String`.");
-                    self.title.replace(input_number);
+                    self.artist.replace(input);
                 }
                 "album" => {
-                    let input_number = value
+                    let input = value
                         .get()
                         .expect("The value needs to be of type `String`.");
-                    self.title.replace(input_number);
+                    self.album.replace(input);
                 }
                 _ => unimplemented!(),
             }
@@ -255,10 +323,16 @@ fn main() {
 
         let stack = gtk::Stack::new();
         stack.set_expand(true);
+
         let song_info = SongInfo::new();
         stack.add_named(song_info.as_ref(), "current_song");
         stack.set_child_title(song_info.as_ref(), Some("Now Playing"));
         stack.set_child_icon_name(song_info.as_ref(), Some("audio-speakers-symbolic"));
+
+        let query_info = QueryInfo::new();
+        stack.add_named(query_info.as_ref(), "query_songs");
+        stack.set_child_title(query_info.as_ref(), Some("Search Database"));
+        stack.set_child_icon_name(song_info.as_ref(), Some("system-search-symbolic"));
 
         let header_bar = HeaderBar::builder()
             .show_close_button(true)
@@ -302,6 +376,14 @@ fn main() {
         song_info
             .update(&mut conn)
             .expect("Couldn't update song info");
+
+        let mut query = mpd::Query::new();
+        query.and(mpd::Term::Any, "Descendents");
+        let songs = conn.find(&mut query, (1, 128));
+        // println!("{:?}", songs);
+        for song in songs.unwrap() {
+            query_info.model.insert(0, &SongObject::new(&song));
+        }
 
         let (mut sender, mut receiver) = mpsc::channel(1000);
         std::thread::spawn(move || loop {
