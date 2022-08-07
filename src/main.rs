@@ -55,7 +55,7 @@ impl SongInfo {
         }
     }
 
-    fn update(&self, conn: &mut mpd::Client) -> anyhow::Result<()> {
+    fn update_album_art(&self, conn: &mut mpd::Client) -> anyhow::Result<()> {
         if let Some(song) = conn.currentsong()? {
             // If we've been allocated a window, pick the greatest dimension
             // (width or height) and divide that dimension by two to get the
@@ -86,7 +86,13 @@ impl SongInfo {
                 )
             });
             self.album_art.set_pixbuf(image_pixbuf.as_ref());
+        }
+        Ok(())
+    }
 
+    fn update(&self, conn: &mut mpd::Client) -> anyhow::Result<()> {
+        self.update_album_art(conn)?;
+        if let Some(song) = conn.currentsong()? {
             let title = song
                 .title
                 .as_ref()
@@ -153,8 +159,9 @@ impl QueryInfo {
 
         let model = gio::ListStore::new(SongObject::static_type());
         let listbox = gtk::ListBox::new();
+        let sender1 = sender.clone();
         listbox.bind_model(Some(&model), move |item| {
-            let sender = sender.clone();
+            let sender = sender1.clone();
 
             let box_ = gtk::ListBoxRow::new();
             let item = item
@@ -346,6 +353,7 @@ mod imp {
 /// Kind of event we can notify the UI future about
 enum StateUpdateKind {
     MpdEvent,
+    WindowResizeEvent,
     QueryUpdateEvent(String),
     QueueAddRequest(String),
 }
@@ -385,7 +393,7 @@ fn main() {
         stack.set_child_title(song_info.as_ref(), Some("Now Playing"));
         stack.set_child_icon_name(song_info.as_ref(), Some("audio-speakers-symbolic"));
 
-        let query_info = QueryInfo::new(sender);
+        let query_info = QueryInfo::new(sender.clone());
         stack.add_named(query_info.as_ref(), "query_songs");
         stack.set_child_title(query_info.as_ref(), Some("Search Database"));
         stack.set_child_icon_name(query_info.as_ref(), Some("system-search-symbolic"));
@@ -427,6 +435,13 @@ fn main() {
         window.set_application(Some(app));
         window.show_all();
 
+        window.connect_size_allocate(move |_, _| {
+            let mut sender = sender.clone();
+            sender
+                .try_send(StateUpdateKind::WindowResizeEvent)
+                .expect("Couldn't notify thread");
+        });
+
         // Now that everything's been allocated a window, let's go ahead and
         // update the widgets.
         song_info
@@ -453,6 +468,11 @@ fn main() {
                                 .update(&mut conn)
                                 .expect("Couldn't update song info");
                         }
+                    }
+                    StateUpdateKind::WindowResizeEvent => {
+                        song_info
+                            .update_album_art(&mut conn)
+                            .expect("Couldn't update album art");
                     }
                     StateUpdateKind::QueryUpdateEvent(query_string) => {
                         // Let's not produce massive queries while the user is typing :)
