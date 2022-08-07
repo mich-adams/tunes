@@ -40,7 +40,7 @@ struct SongInfo {
 }
 
 impl SongInfo {
-    fn new() -> Self {
+    fn new(sender: mpsc::Sender<StateUpdateKind>) -> Self {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
         let album_art = gtk::Image::new();
         let song_text = gtk::Label::new(None);
@@ -48,6 +48,88 @@ impl SongInfo {
         song_text.set_line_wrap(true);
         container.add(&album_art);
         container.add(&song_text);
+
+        let action_bar = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        action_bar.set_halign(gtk::Align::Center);
+
+        let control_previous_song = gtk::Button::from_icon_name(
+            Some("media-skip-backward-symbolic"),
+            gtk::IconSize::SmallToolbar,
+        );
+        action_bar.add(&control_previous_song);
+        let sender1 = sender.clone();
+        control_previous_song.connect_clicked(move |_| {
+            let mut sender = sender1.clone();
+            sender
+                .try_send(StateUpdateKind::PlaybackStateChange(
+                    PlaybackStateChange::SkipBackwards,
+                ))
+                .expect("Couldn't notify thread");
+        });
+
+        let control_start_song = gtk::Button::from_icon_name(
+            Some("media-playback-start-symbolic"),
+            gtk::IconSize::SmallToolbar,
+        );
+        action_bar.add(&control_start_song);
+        let sender1 = sender.clone();
+        control_start_song.connect_clicked(move |_| {
+            let mut sender = sender1.clone();
+            sender
+                .try_send(StateUpdateKind::PlaybackStateChange(
+                    PlaybackStateChange::StartPlayback,
+                ))
+                .expect("Couldn't notify thread");
+        });
+
+        let control_pause_song = gtk::Button::from_icon_name(
+            Some("media-playback-pause-symbolic"),
+            gtk::IconSize::SmallToolbar,
+        );
+        action_bar.add(&control_pause_song);
+        let sender1 = sender.clone();
+        control_pause_song.connect_clicked(move |_| {
+            let mut sender = sender1.clone();
+            sender
+                .try_send(StateUpdateKind::PlaybackStateChange(
+                    PlaybackStateChange::PausePlayback,
+                ))
+                .expect("Couldn't notify thread");
+        });
+
+        let control_stop_song = gtk::Button::from_icon_name(
+            Some("media-playback-stop-symbolic"),
+            gtk::IconSize::SmallToolbar,
+        );
+        action_bar.add(&control_stop_song);
+        let sender1 = sender.clone();
+        control_stop_song.connect_clicked(move |_| {
+            let mut sender = sender1.clone();
+            sender
+                .try_send(StateUpdateKind::PlaybackStateChange(
+                    PlaybackStateChange::StopPlayback,
+                ))
+                .expect("Couldn't notify thread");
+        });
+
+        let control_next_song = gtk::Button::from_icon_name(
+            Some("media-skip-forward-symbolic"),
+            gtk::IconSize::SmallToolbar,
+        );
+        action_bar.add(&control_next_song);
+        let sender1 = sender.clone();
+        control_next_song.connect_clicked(move |_| {
+            let mut sender = sender1.clone();
+            sender
+                .try_send(StateUpdateKind::PlaybackStateChange(
+                    PlaybackStateChange::SkipForwards,
+                ))
+                .expect("Couldn't notify thread");
+        });
+
+        container.add(&action_bar);
+        action_bar.show_all();
+
         SongInfo {
             container,
             album_art,
@@ -356,6 +438,16 @@ enum StateUpdateKind {
     WindowResizeEvent,
     QueryUpdateEvent(String),
     QueueAddRequest(String),
+    PlaybackStateChange(PlaybackStateChange),
+}
+
+#[derive(Debug)]
+enum PlaybackStateChange {
+    SkipBackwards,
+    SkipForwards,
+    StartPlayback,
+    StopPlayback,
+    PausePlayback,
 }
 
 fn main() {
@@ -388,7 +480,7 @@ fn main() {
         let stack = gtk::Stack::new();
         stack.set_expand(true);
 
-        let song_info = SongInfo::new();
+        let song_info = SongInfo::new(sender.clone());
         stack.add_named(song_info.as_ref(), "current_song");
         stack.set_child_title(song_info.as_ref(), Some("Now Playing"));
         stack.set_child_icon_name(song_info.as_ref(), Some("audio-speakers-symbolic"));
@@ -491,10 +583,29 @@ fn main() {
                     StateUpdateKind::QueueAddRequest(filename) => {
                         conn.push_str(filename).expect("Couldn't queue song");
                     }
+                    StateUpdateKind::PlaybackStateChange(action) => {
+                        dispatch_playback_state_change(&mut conn, action)
+                            .expect("Couldn't queue action");
+                    }
                 }
             }
         });
     });
 
     application.run();
+}
+
+fn dispatch_playback_state_change(
+    conn: &mut mpd::Client,
+    action: PlaybackStateChange,
+) -> anyhow::Result<()> {
+    use PlaybackStateChange::*;
+    match action {
+        SkipBackwards => conn.prev()?,
+        SkipForwards => conn.next()?,
+        StartPlayback => conn.play()?,
+        StopPlayback => conn.stop()?,
+        PausePlayback => conn.pause(true)?,
+    }
+    Ok(())
 }
