@@ -138,8 +138,17 @@ struct QueryInfo {
 }
 
 impl QueryInfo {
-    fn new() -> Self {
-        let container = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    fn new(sender: mpsc::Sender<StateUpdateKind>) -> Self {
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+        let query_input = gtk::Entry::builder().visible(true).build();
+        query_input.connect_key_press_event(move |widget, _| {
+            let mut sender = sender.clone(); // Interesting ownership puzzle :D
+            sender
+                .try_send(StateUpdateKind::QueryUpdateEvent(widget.text().into()))
+                .expect("Couldn't notify thread");
+            gtk::Inhibit(false)
+        });
 
         let model = gio::ListStore::new(SongObject::static_type());
         let listbox = gtk::ListBox::new();
@@ -149,13 +158,13 @@ impl QueryInfo {
                 .downcast_ref::<SongObject>()
                 .expect("Row data is of wrong type");
 
-            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+            let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 32);
 
             let title_label = gtk::Label::new(None);
             item.bind_property("title", &title_label, "label")
                 .flags(glib::BindingFlags::DEFAULT | glib::BindingFlags::SYNC_CREATE)
                 .build();
-            hbox.pack_start(&title_label, true, true, 0);
+            hbox.pack_start(&title_label, false, false, 0);
 
             title_label.set_visible(true); // why?
 
@@ -187,6 +196,7 @@ impl QueryInfo {
         scrolled_window.add(&listbox);
         scrolled_window.set_vexpand(true);
 
+        container.add(&query_input);
         container.add(&scrolled_window);
 
         QueryInfo { container, model }
@@ -307,6 +317,12 @@ mod imp {
     }
 }
 
+/// Kind of event we can notify the UI future about
+enum StateUpdateKind {
+    MpdEvent,
+    QueryUpdateEvent(String),
+}
+
 fn main() {
     let application = gtk::Application::builder()
         .application_id("space.jakob.Tunes")
@@ -316,6 +332,19 @@ fn main() {
         libhandy::init();
 
         let mut conn = Client::connect("127.0.0.1:6600").unwrap();
+        let (sender, mut receiver) = mpsc::channel(1000);
+
+        let mut sender1 = sender.clone();
+        std::thread::spawn(move || loop {
+            let mut conn = Client::connect("127.0.0.1:6600").unwrap();
+            if let Ok(_subsystems) = conn.wait(&[mpd::idle::Subsystem::Player]) {
+                sender1
+                    .try_send(StateUpdateKind::MpdEvent)
+                    .expect("Couldn't notify thread");
+            } else {
+                break;
+            }
+        });
 
         // conn.volume(100).unwrap();
         // conn.load("My Lounge Playlist", ..).unwrap();
@@ -329,10 +358,10 @@ fn main() {
         stack.set_child_title(song_info.as_ref(), Some("Now Playing"));
         stack.set_child_icon_name(song_info.as_ref(), Some("audio-speakers-symbolic"));
 
-        let query_info = QueryInfo::new();
+        let query_info = QueryInfo::new(sender);
         stack.add_named(query_info.as_ref(), "query_songs");
         stack.set_child_title(query_info.as_ref(), Some("Search Database"));
-        stack.set_child_icon_name(song_info.as_ref(), Some("system-search-symbolic"));
+        stack.set_child_icon_name(query_info.as_ref(), Some("system-search-symbolic"));
 
         let header_bar = HeaderBar::builder()
             .show_close_button(true)
@@ -378,33 +407,40 @@ fn main() {
             .expect("Couldn't update song info");
 
         let mut query = mpd::Query::new();
-        query.and(mpd::Term::Any, "Descendents");
-        let songs = conn.find(&mut query, (1, 128));
+        query.and(mpd::Term::Any, "");
+        let songs = conn.find(&mut query, (0, 65535));
         // println!("{:?}", songs);
         for song in songs.unwrap() {
             query_info.model.insert(0, &SongObject::new(&song));
         }
 
-        let (mut sender, mut receiver) = mpsc::channel(1000);
-        std::thread::spawn(move || loop {
-            let mut conn = Client::connect("127.0.0.1:6600").unwrap();
-            if let Ok(_subsystems) = conn.wait(&[mpd::idle::Subsystem::Player]) {
-                sender.try_send(true).expect("Couldn't notify thread");
-            } else {
-                sender.try_send(false).expect("Couldn't notify thread");
-                break;
-            }
-        });
-
         let main_context = gtk::glib::MainContext::default();
         main_context.spawn_local(async move {
             let mut conn = Client::connect("127.0.0.1:6600").unwrap();
-            while let Some(_item) = receiver.next().await {
-                if let Ok(title) = header_title(&mut conn) {
-                    ui.header_bar.set_title(Some(&title));
-                    song_info
-                        .update(&mut conn)
-                        .expect("Couldn't update song info");
+            while let Some(event_type) = receiver.next().await {
+                match event_type {
+                    StateUpdateKind::MpdEvent => {
+                        if let Ok(title) = header_title(&mut conn) {
+                            ui.header_bar.set_title(Some(&title));
+                            song_info
+                                .update(&mut conn)
+                                .expect("Couldn't update song info");
+                        }
+                    }
+                    StateUpdateKind::QueryUpdateEvent(query_string) => {
+                        // Let's not produce massive queries while the user is typing :)
+                        if query_string.len() <= 2 {
+                            continue;
+                        }
+                        query_info.model.remove_all();
+                        let mut query = mpd::Query::new();
+                        query.and(mpd::Term::Any, &query_string);
+                        let songs = conn.search(&mut query, (0, 65535));
+                        // println!("{:?}", songs);
+                        for song in songs.unwrap() {
+                            query_info.model.insert(0, &SongObject::new(&song));
+                        }
+                    }
                 }
             }
         });
