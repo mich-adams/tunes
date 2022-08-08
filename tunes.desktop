@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Tunes
+Comment=Mobile-friendly MPD client
+Icon=mpd
+Terminal=false
+Exec=/usr/bin/tunes
+Categories=Multimedia
