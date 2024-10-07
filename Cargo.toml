@@ -9,4 +9,4 @@ futures = "0.3"
 gtk = "0.15"
 libhandy = "0.9"
 mpd = { path = "./vendored/mpd" }
-once_cell = "1.19"
+once_cell = "1.20"
